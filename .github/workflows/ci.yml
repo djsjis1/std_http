@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build-windows:
+    name: Windows (MSVC)
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        build_type: [Debug, Release]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Configure CMake
+      run: cmake -B ${{github.workspace}}/build -DSTD_HTTP_BUILD_TESTS=ON -DSTD_HTTP_BUILD_EXAMPLES=ON
+    
+    - name: Build
+      run: cmake --build ${{github.workspace}}/build --config ${{matrix.build_type}}
+    
+    - name: Test
+      working-directory: ${{github.workspace}}/build
+      run: ctest -C ${{matrix.build_type}} --output-on-failure
+
+  build-linux:
+    name: Linux (GCC)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        build_type: [Debug, Release]
+        compiler: [gcc, clang]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install dependencies
+      run: sudo apt-get update && sudo apt-get install -y cmake
+    
+    - name: Configure CMake (GCC)
+      if: matrix.compiler == 'gcc'
+      run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{matrix.build_type}} -DSTD_HTTP_BUILD_TESTS=ON -DSTD_HTTP_BUILD_EXAMPLES=ON
+      env:
+        CC: gcc
+        CXX: g++
+    
+    - name: Configure CMake (Clang)
+      if: matrix.compiler == 'clang'
+      run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{matrix.build_type}} -DSTD_HTTP_BUILD_TESTS=ON -DSTD_HTTP_BUILD_EXAMPLES=ON
+      env:
+        CC: clang
+        CXX: clang++
+    
+    - name: Build
+      run: cmake --build ${{github.workspace}}/build
+    
+    - name: Test
+      working-directory: ${{github.workspace}}/build
+      run: ctest --output-on-failure
+
+  build-macos:
+    name: macOS (Apple Clang)
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        build_type: [Debug, Release]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Configure CMake
+      run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{matrix.build_type}} -DSTD_HTTP_BUILD_TESTS=ON -DSTD_HTTP_BUILD_EXAMPLES=ON
+    
+    - name: Build
+      run: cmake --build ${{github.workspace}}/build
+    
+    - name: Test
+      working-directory: ${{github.workspace}}/build
+      run: ctest --output-on-failure

@@ -1,0 +1,17 @@
+@PACKAGE_INIT@
+
+# httpConfig.cmake - std_http 包配置文件
+# 
+# 使用方式:
+#   find_package(http CONFIG REQUIRED)
+#   target_link_libraries(your_target PRIVATE http::http)
+
+# 查找依赖
+include(CMakeFindDependencyMacro)
+find_dependency(llhttp CONFIG)
+
+# 包含导出的目标
+include("${CMAKE_CURRENT_LIST_DIR}/httpTargets.cmake")
+
+# 检查所需的目标是否存在
+check_required_components(http)

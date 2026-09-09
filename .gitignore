@@ -1,0 +1,63 @@
+# 构建输出
+build/
+out/
+cmake-build-*/
+
+# CMake 生成文件
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+compile_commands.json
+
+# Visual Studio
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.suo
+*.opensdf
+*.sdf
+.vs/
+ipch/
+
+# 编译产物
+*.o
+*.obj
+*.lib
+*.dll
+*.exe
+*.a
+*.so
+*.dylib
+*.exp
+*.pdb
+*.ilk
+
+# Debug/Release 目录
+Debug/
+Release/
+RelWithDebInfo/
+MinSizeRel/
+
+# 测试相关
+Testing/
+CTestTestfile.cmake
+
+# 安装目录
+install/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 包管理
+_deps/
