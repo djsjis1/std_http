@@ -81,6 +81,7 @@ public:
 private:
     void setup_callbacks();
     void clear_result();
+    void set_error(llhttp_errno_t err);
 
     llhttp_t parser_;
     llhttp_settings_t settings_;

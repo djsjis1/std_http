@@ -408,3 +408,56 @@ TEST_CASE(http_protocol_reuse_after_clear)
     CHECK(second.find("/first") == std::string::npos);
     CHECK(second.find("first.com") == std::string::npos);
 }
+
+// 测试表单请求 round-trip（构建后解析）
+TEST_CASE(http_protocol_form_roundtrip)
+{
+    std::string form_text = http_protocol::form(
+        "POST", "/search",
+        {{"q", "c++ http"}, {"page", "1"}, {"name", "张三"}});
+
+    http_parse parser(HTTP_REQUEST);
+    REQUIRE(parser.feed_all(form_text.data(), form_text.size()));
+
+    CHECK(parser.http_method == "POST");
+    CHECK(parser.http_url == "/search");
+    CHECK(parser.header("Content-Type") == "application/x-www-form-urlencoded");
+
+    // 验证 body 可以正确解码
+    std::string decoded_body = parser.http_body;
+    CHECK(decoded_body.find("q=c%2B%2B%20http") != std::string::npos);
+    CHECK(decoded_body.find("page=1") != std::string::npos);
+}
+
+// 测试 status_line 链式接口
+TEST_CASE(http_protocol_status_line_chain)
+{
+    std::string result = http_protocol()
+                             .status_line(404, "Not Found")
+                             .header("Content-Type", "text/plain")
+                             .body("page not found")
+                             .build();
+
+    CHECK_THAT(result, ContainsSubstring("HTTP/1.1 404 Not Found\r\n"));
+    CHECK_THAT(result, ContainsSubstring("Content-Type: text/plain\r\n"));
+    CHECK_THAT(result, ContainsSubstring("page not found"));
+
+    // 测试自定义 reason
+    std::string custom = http_protocol()
+                             .status_line(200, "All Good")
+                             .build();
+    CHECK_THAT(custom, ContainsSubstring("HTTP/1.1 200 All Good\r\n"));
+}
+
+// 测试未设置起始行直接 build
+TEST_CASE(http_protocol_build_without_start_line)
+{
+    std::string result = http_protocol()
+                             .header("Host", "example.com")
+                             .body("data")
+                             .build();
+
+    // 应该以空行开头（无起始行），但头部和 body 应该正常
+    CHECK_THAT(result, ContainsSubstring("Host: example.com\r\n"));
+    CHECK_THAT(result, ContainsSubstring("data"));
+}

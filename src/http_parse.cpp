@@ -2,6 +2,8 @@
 
 #include <cctype>
 
+#include "http_utils.h"
+
 namespace
 {
 
@@ -9,20 +11,6 @@ namespace
     inline http_parse *self(llhttp_t *parser)
     {
         return static_cast<http_parse *>(parser->data);
-    }
-
-    // 头部字段名按 RFC 7230 大小写不敏感
-    bool field_equals(const std::string &a, const std::string &b)
-    {
-        if (a.size() != b.size())
-            return false;
-        for (size_t i = 0; i < a.size(); ++i)
-        {
-            if (std::tolower(static_cast<unsigned char>(a[i])) !=
-                std::tolower(static_cast<unsigned char>(b[i])))
-                return false;
-        }
-        return true;
     }
 
 } // namespace
@@ -33,7 +21,7 @@ const std::string &http_parse::header(const std::string &field) const
 {
     for (const auto &h : http_headers)
     {
-        if (field_equals(h.first, field))
+        if (http_utils::iequals(h.first, field))
             return h.second;
     }
     return empty_string_;
@@ -44,7 +32,7 @@ std::vector<std::string> http_parse::headers(const std::string &field) const
     std::vector<std::string> result;
     for (const auto &h : http_headers)
     {
-        if (field_equals(h.first, field))
+        if (http_utils::iequals(h.first, field))
             result.push_back(h.second);
     }
     return result;
@@ -80,8 +68,8 @@ void http_parse::setup_callbacks()
     settings_.on_url = [](llhttp_t *parser, const char *at, size_t length) -> int
     {
         http_parse *p = self(parser);
-        // URL 长度限制检查
-        if (p->url_limit && p->http_url.size() + length > p->url_limit)
+        // URL 长度限制检查(避免 size() + length 整数溢出)
+        if (p->url_limit && length > p->url_limit - p->http_url.size())
         {
             llhttp_set_error_reason(parser, "url limit exceeded");
             return -1;
@@ -99,8 +87,8 @@ void http_parse::setup_callbacks()
     settings_.on_header_field = [](llhttp_t *parser, const char *at, size_t length) -> int
     {
         http_parse *p = self(parser);
-        // 字段名长度限制检查
-        if (p->header_field_limit && p->current_field_.size() + length > p->header_field_limit)
+        // 字段名长度限制检查(避免 size() + length 整数溢出)
+        if (p->header_field_limit && length > p->header_field_limit - p->current_field_.size())
         {
             llhttp_set_error_reason(parser, "header field length limit exceeded");
             return -1;
@@ -116,8 +104,8 @@ void http_parse::setup_callbacks()
     settings_.on_header_value = [](llhttp_t *parser, const char *at, size_t length) -> int
     {
         http_parse *p = self(parser);
-        // 字段值长度限制检查
-        if (p->header_value_limit && p->current_value_.size() + length > p->header_value_limit)
+        // 字段值长度限制检查(避免 size() + length 整数溢出)
+        if (p->header_value_limit && length > p->header_value_limit - p->current_value_.size())
         {
             llhttp_set_error_reason(parser, "header value length limit exceeded");
             return -1;
@@ -149,8 +137,8 @@ void http_parse::setup_callbacks()
     settings_.on_body = [](llhttp_t *parser, const char *at, size_t length) -> int
     {
         http_parse *p = self(parser);
-        // 防止超大消息体打爆内存,超限则中止解析
-        if (p->body_limit && p->http_body.size() + length > p->body_limit)
+        // 防止超大消息体打爆内存,超限则中止解析(避免 size() + length 整数溢出)
+        if (p->body_limit && length > p->body_limit - p->http_body.size())
         {
             llhttp_set_error_reason(parser, "body limit exceeded");
             return -1;
@@ -166,8 +154,11 @@ void http_parse::setup_callbacks()
     settings_.on_message_complete = [](llhttp_t *parser) -> int
     {
         http_parse *p = self(parser);
-        p->http_version = std::to_string(llhttp_get_http_major(parser)) + "." +
-                          std::to_string(llhttp_get_http_minor(parser));
+        // 版本字符串直接构造,避免 to_string 临时对象
+        p->http_version.resize(3);
+        p->http_version[0] = '0' + static_cast<char>(llhttp_get_http_major(parser));
+        p->http_version[1] = '.';
+        p->http_version[2] = '0' + static_cast<char>(llhttp_get_http_minor(parser));
         if (llhttp_get_type(parser) == HTTP_REQUEST)
         {
             // 请求行此时已解析完毕,method 可用
@@ -201,24 +192,23 @@ bool http_parse::feed(const char *data, size_t len)
     llhttp_errno_t err = llhttp_execute(&parser_, data, len);
     if (err != HPE_OK)
     {
-        std::string error_msg = std::string(llhttp_errno_name(err)) + ": " + llhttp_get_error_reason(&parser_);
-        // 出错后解析器进入错误态,重置以便接收下一条消息
-        reset();
-        error_ = error_msg; // 保存错误信息
+        set_error(err);
         return false;
     }
 
-    // 如果消息需要 EOF 来完成,调用 llhttp_finish
-    if (llhttp_message_needs_eof(&parser_))
+    // 仅在消息已完成时才调用 llhttp_finish 验证
+    // 避免对无 Content-Length 的响应过早触发 finish,影响增量解析
+    if (!llhttp_message_needs_eof(&parser_))
     {
-        err = llhttp_finish(&parser_);
-        if (err != HPE_OK)
-        {
-            std::string error_msg = std::string(llhttp_errno_name(err)) + ": " + llhttp_get_error_reason(&parser_);
-            reset();
-            error_ = error_msg; // 保存错误信息
-            return false;
-        }
+        return true;
+    }
+
+    // 消息需要 EOF,检查是否已完成
+    err = llhttp_finish(&parser_);
+    if (err != HPE_OK)
+    {
+        set_error(err);
+        return false;
     }
 
     return true;
@@ -227,6 +217,7 @@ bool http_parse::feed(const char *data, size_t len)
 bool http_parse::feed_all(const char *data, size_t len)
 {
     reset();
+    clear_result(); // 清空旧结果,防止 feed 失败时残留
     return feed(data, len);
 }
 
@@ -238,4 +229,12 @@ void http_parse::clear_result()
     http_body.clear();
     http_headers.clear();
     status_code = 0;
+}
+
+void http_parse::set_error(llhttp_errno_t err)
+{
+    // 出错后解析器进入错误态,重置以便接收下一条消息
+    std::string error_msg = std::string(llhttp_errno_name(err)) + ": " + llhttp_get_error_reason(&parser_);
+    reset();
+    error_ = error_msg; // 保存错误信息
 }

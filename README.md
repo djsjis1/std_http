@@ -182,6 +182,8 @@ target_link_libraries(your_target PRIVATE http::http)
 
 ### http_protocol
 
+#### 一站式接口
+
 | 方法 | 说明 |
 | ------ | ------ |
 | `request(method, url, headers, body)` | 构建请求 |
@@ -191,6 +193,17 @@ target_link_libraries(your_target PRIVATE http::http)
 | `url_encode(text)` | URL 编码 |
 | `url_decode(text)` | URL 解码 |
 | `status_text(code)` | 获取状态码原因短语 |
+
+#### 链式接口
+
+| 方法 | 说明 |
+| ------ | ------ |
+| `request_line(method, url, version)` | 设置请求行 |
+| `status_line(status, reason, version)` | 设置响应状态行 |
+| `header(field, value, replace)` | 添加头部，`replace=true` 时替换同名头部 |
+| `body(text)` | 设置消息体 |
+| `build()` | 生成完整报文 |
+| `clear()` | 清空所有内容，可复用 |
 
 ## 依赖
 

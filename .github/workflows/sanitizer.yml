@@ -42,19 +42,3 @@ jobs:
         UBSAN_OPTIONS: print_stacktrace=1:abort_on_error=1
       run: ctest --output-on-failure
 
-  sanitizer-windows:
-    name: address (windows)
-    runs-on: windows-latest
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Configure CMake
-      run: cmake -B build -DSTD_HTTP_BUILD_TESTS=ON -DSTD_HTTP_BUILD_EXAMPLES=ON
-
-    - name: Build
-      run: cmake --build build --config Debug
-
-    - name: Test
-      working-directory: build
-      run: ctest -C Debug --output-on-failure

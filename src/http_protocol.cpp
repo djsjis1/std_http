@@ -1,4 +1,5 @@
 #include "http_protocol.h"
+#include "http_utils.h"
 
 #include <algorithm>
 #include <cctype>
@@ -84,28 +85,13 @@ namespace
 
     // ---- 工具 ----
 
-    bool iequals(const std::string &a, const char *b)
-    {
-        size_t n = 0;
-        while (b[n])
-            ++n;
-        if (a.size() != n)
-            return false;
-        for (size_t i = 0; i < n; ++i)
-        {
-            if (std::tolower(static_cast<unsigned char>(a[i])) !=
-                std::tolower(static_cast<unsigned char>(b[i])))
-                return false;
-        }
-        return true;
-    }
 
     bool has_header(const http_protocol::header_list &headers, const char *field)
     {
         return std::any_of(headers.begin(), headers.end(),
                            [field](const std::pair<std::string, std::string> &h)
                            {
-                               return iequals(h.first, field);
+                               return http_utils::iequals(h.first, field);
                            });
     }
 
@@ -318,7 +304,7 @@ http_protocol &http_protocol::request_line(const char *method, const char *url,
     require(is_version(version), "version", version);
 
     clear();
-    start_line_ = std::string(method) + " " + url + " " + version + "\r\n";
+    start_line_.append(method).append(" ").append(url).append(" ").append(version).append("\r\n");
     return *this;
 }
 
@@ -336,7 +322,7 @@ http_protocol &http_protocol::status_line(int status_code, const char *reason,
     }
     require(is_safe_text(reason), "reason", reason);
 
-    start_line_ = std::string(version) + " " + std::to_string(status_code);
+    start_line_.append(version).append(" ").append(std::to_string(status_code));
     if (*reason)
     {
         start_line_ += " ";
@@ -358,7 +344,7 @@ http_protocol &http_protocol::header(const std::string &field, const std::string
             std::remove_if(headers_.begin(), headers_.end(),
                            [&field](const std::pair<std::string, std::string> &h)
                            {
-                               return iequals(h.first, field.c_str());
+                               return http_utils::iequals(h.first, field.c_str());
                            }),
             headers_.end());
     }
