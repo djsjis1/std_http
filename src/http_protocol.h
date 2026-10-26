@@ -7,9 +7,10 @@
 // HTTP 报文构建器(请求/响应均可)。
 //
 // 安全与规范(参考 boost::beast / cpp-httplib):
-//   - 写入时按 RFC 7230 校验:字段名/方法必须是 token,值中禁止 CR/LF/NUL,
-//     防止 CRLF 头注入;非法输入抛出 std::invalid_argument
-//   - build() 自动补空行;有消息体且未手动设置时自动补 Content-Length
+//   - 写入时按 RFC 7230 校验:字段名/方法必须是 token,值中禁止 CR/LF 等控制字符
+//     (HTAB 除外),防止 CRLF 头注入;非法输入抛出 std::invalid_argument
+//   - build() 自动补空行;显式调用过 body() 时自动补 Content-Length(空消息体为 0);
+//     已有 Transfer-Encoding 时不补,避免 TE + CL 并存(RFC 7230 禁止)
 //
 // 两种用法:
 //   1. 一站式(推荐):http_protocol::request(...) / json(...) / form(...) / response(...)

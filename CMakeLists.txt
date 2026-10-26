@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(std_http VERSION 1.0.0 LANGUAGES C CXX)
+project(std_http VERSION 1.1.0 LANGUAGES C CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -19,8 +19,23 @@ if(MSVC)
 endif()
 
 # llhttp 依赖:优先使用已安装的版本,否则使用 bundled 版本
+set(STD_HTTP_LLHTTP_TARGET "")
 find_package(llhttp CONFIG QUIET)
-if(NOT llhttp_FOUND)
+if(llhttp_FOUND)
+  # 安装导出的目标名依 llhttp 构建选项而异(llhttp::llhttp_static / llhttp::llhttp_shared),
+  # 不存在 ALIAS llhttp::llhttp,因此逐一探测实际可用的目标
+  foreach(_candidate llhttp::llhttp llhttp::llhttp_static llhttp::llhttp_shared)
+    if(TARGET ${_candidate})
+      set(STD_HTTP_LLHTTP_TARGET ${_candidate})
+      break()
+    endif()
+  endforeach()
+  if(NOT STD_HTTP_LLHTTP_TARGET)
+    message(STATUS "llhttp found but no known target, falling back to bundled version")
+  endif()
+endif()
+
+if(NOT STD_HTTP_LLHTTP_TARGET)
   # 使用 bundled llhttp,默认只构建静态库
   if(NOT DEFINED BUILD_SHARED_LIBS)
     set(BUILD_SHARED_LIBS OFF)
@@ -29,6 +44,7 @@ if(NOT llhttp_FOUND)
     set(BUILD_STATIC_LIBS ON)
   endif()
   add_subdirectory(third/llhttp)
+  set(STD_HTTP_LLHTTP_TARGET llhttp::llhttp)
 endif()
 
 # ---------------- 封装库 ----------------
@@ -42,7 +58,7 @@ target_include_directories(http PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
-target_link_libraries(http PUBLIC llhttp::llhttp)
+target_link_libraries(http PUBLIC ${STD_HTTP_LLHTTP_TARGET})
 
 set_target_properties(http PROPERTIES
   OUTPUT_NAME stdhttp

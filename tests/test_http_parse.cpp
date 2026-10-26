@@ -375,7 +375,7 @@ TEST_CASE(http_parse_incomplete_message)
     REQUIRE(parser.feed(partial, strlen(partial)));
 
     // 此时消息未完成，但解析没有出错
-    CHECK(parser.http_method.empty()); // method 在 message_complete 时才设置
+    CHECK(parser.http_method.empty()); // method 在 headers_complete 时才设置
 
     // 喂入剩余数据完成消息
     const char *rest = "Host: example.com\r\n\r\n";
@@ -473,14 +473,9 @@ TEST_CASE(http_parse_limit_zero_means_unlimited)
 }
 
 // 测试无 Content-Length 响应的行为
-// 注意：无 CL/TE 的响应需要 llhttp_finish() 来标记结束
-// 这种情况下应该使用 feed_all() 或在连接关闭时调用 finish
+// 无 CL/TE 的响应依赖 EOF 结束:增量 feed 后调用 finish() 补发完成事件
 TEST_CASE(http_parse_no_content_length_behavior)
 {
-    // 无 CL 响应无法通过增量 feed 完成，需要外部标记 EOF
-    // 这是 HTTP/1.1 协议的特性，不是 bug
-    // 实际使用中，服务端应该发送 Content-Length 或 Transfer-Encoding
-    
     // 有 Content-Length 的响应可以正常增量解析
     http_parse parser(HTTP_RESPONSE);
     const char *headers = "HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\n";
@@ -548,4 +543,147 @@ TEST_CASE(http_parse_connection_close_keep_alive)
     CHECK(parser.http_method == "GET");
     CHECK(parser.header("Connection") == "close");
     // keep_alive() 的具体值取决于 llhttp 内部状态，这里只验证解析正确
+}
+
+// 无 Content-Length 的响应:增量 feed 不得提前/重复触发 message_complete,
+// 由 finish() 在 EOF 时补发(回归:feed 内部误调 llhttp_finish 导致二次触发)
+TEST_CASE(http_parse_no_cl_response_incremental_no_early_complete)
+{
+    http_parse parser(HTTP_RESPONSE);
+    int complete_count = 0;
+    parser.message_complete = [&]()
+    { ++complete_count; };
+
+    // 头部未结束也不能失败(回归:原实现在此即调用 finish 导致 Invalid EOF)
+    REQUIRE(parser.feed("HTTP/1.1 200 OK\r\n", 17));
+    CHECK(complete_count == 0);
+
+    REQUIRE(parser.feed("\r\n", 2)); // 头部结束
+    CHECK(complete_count == 0);      // 不应提前触发 message_complete
+
+    REQUIRE(parser.feed("hello world", 11));
+    CHECK(parser.http_body == "hello world");
+    CHECK(complete_count == 0);
+
+    CHECK(parser.finish()); // 连接关闭时调用
+    CHECK(complete_count == 1);
+    CHECK(parser.status_code == 200);
+    CHECK(parser.http_body == "hello world");
+
+    // 幂等:重复 finish 不再补发
+    CHECK(parser.finish());
+    CHECK(complete_count == 1);
+}
+
+// 无 Content-Length 的响应:feed_all 应恰好补发一次 message_complete
+TEST_CASE(http_parse_no_cl_response_feed_all_single_complete)
+{
+    const char *resp = "HTTP/1.1 200 OK\r\n\r\nbody";
+    http_parse parser(HTTP_RESPONSE);
+    int complete_count = 0;
+    parser.message_complete = [&]()
+    { ++complete_count; };
+
+    REQUIRE(parser.feed_all(resp, strlen(resp)));
+    CHECK(complete_count == 1);
+    CHECK(parser.http_body == "body");
+}
+
+// 空连接直接关闭:finish() 应返回 false(没有完整消息)
+TEST_CASE(http_parse_finish_without_message)
+{
+    http_parse parser(HTTP_REQUEST);
+    CHECK(!parser.finish());
+}
+
+// 101 Switching Protocols 是合法响应,不应误报为解析失败
+TEST_CASE(http_parse_101_upgrade_not_error)
+{
+    const char *resp =
+        "HTTP/1.1 101 Switching Protocols\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "\r\n";
+
+    http_parse parser(HTTP_RESPONSE);
+    REQUIRE(parser.feed_all(resp, strlen(resp)));
+    CHECK(parser.status_code == 101);
+    CHECK(parser.is_upgrade());
+    CHECK(parser.error().empty());
+}
+
+// CONNECT 请求是合法请求(代理隧道),不应误报为解析失败
+TEST_CASE(http_parse_connect_request_not_error)
+{
+    const char *req =
+        "CONNECT example.com:443 HTTP/1.1\r\n"
+        "Host: example.com:443\r\n"
+        "\r\n";
+
+    http_parse parser(HTTP_REQUEST);
+    REQUIRE(parser.feed_all(req, strlen(req)));
+    CHECK(parser.http_method == "CONNECT");
+    CHECK(parser.is_upgrade());
+    CHECK(parser.error().empty());
+}
+
+// method/status_code/headers 在 headers_complete 时即已就绪
+TEST_CASE(http_parse_available_at_headers_complete)
+{
+    http_parse parser(HTTP_RESPONSE);
+    int called = 0;
+    parser.headers_complete = [&]()
+    {
+        ++called;
+        CHECK(parser.status_code == 404);
+        CHECK(parser.header("Content-Length") == "3");
+    };
+
+    const char *resp = "HTTP/1.1 404 Not Found\r\nContent-Length: 3\r\n\r\nabc";
+    REQUIRE(parser.feed_all(resp, strlen(resp)));
+    CHECK(called == 1);
+}
+
+// chunked 编码的 chunk 边界回调:每个 chunk(含终止 0 chunk)各触发一次
+TEST_CASE(http_parse_chunk_callbacks)
+{
+    const char *req =
+        "POST /upload HTTP/1.1\r\n"
+        "Transfer-Encoding: chunked\r\n"
+        "\r\n"
+        "5\r\nhello\r\n"
+        "6\r\n world\r\n"
+        "0\r\n\r\n";
+
+    http_parse parser(HTTP_REQUEST);
+    int header_count = 0, complete_count = 0;
+    parser.chunk_header = [&]()
+    { ++header_count; };
+    parser.chunk_complete = [&]()
+    { ++complete_count; };
+
+    REQUIRE(parser.feed_all(req, strlen(req)));
+    CHECK(parser.http_body == "hello world");
+    CHECK(header_count == 3);
+    CHECK(complete_count == 3);
+}
+
+// 解析中途调小 limit 应仍然生效(回归:size_t 下溢使限制失效)
+TEST_CASE(http_parse_limit_shrink_midway)
+{
+    http_parse parser(HTTP_REQUEST);
+    parser.url_limit = 100;
+    REQUIRE(parser.feed("GET /aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 37));
+
+    parser.url_limit = 10;
+    REQUIRE(!parser.feed("bbbb HTTP/1.1\r\nHost: x\r\n\r\n", 26));
+    CHECK(!parser.error().empty());
+}
+
+// feed_all 对不完整的输入应返回 false(而非静默成功)
+TEST_CASE(http_parse_feed_all_incomplete_input)
+{
+    http_parse parser(HTTP_REQUEST);
+    REQUIRE(!parser.feed_all("GET / HTTP/1.1\r\n", 16));
+    CHECK(!parser.error().empty());
 }

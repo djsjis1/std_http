@@ -124,5 +124,41 @@ int main()
                   << "status: " << both_parser.status_code << "\n";
     }
 
+    // ---- 7. 无 Content-Length 的响应:连接关闭(EOF)时调用 finish() ----
+    {
+        http_parse eof_parser(HTTP_RESPONSE);
+        int complete_count = 0;
+        eof_parser.message_complete = [&]()
+        { ++complete_count; };
+
+        eof_parser.feed("HTTP/1.1 200 OK\r\n\r\n", 19);
+        eof_parser.feed("streaming body", 14);
+        std::cout << "===== EOF-finished response =====\n"
+                  << "complete events before finish: " << complete_count << "\n";
+        bool ok = eof_parser.finish();
+        std::cout << "finish(): " << std::boolalpha << ok << "\n"
+                  << "status: " << eof_parser.status_code << "\n"
+                  << "body:   " << eof_parser.http_body << "\n"
+                  << "complete events: " << complete_count << "\n";
+    }
+
+    // ---- 8. 协议升级:101 Switching Protocols ----
+    {
+        const char *upgrade =
+            "HTTP/1.1 101 Switching Protocols\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            "\r\n";
+
+        http_parse upgrade_parser(HTTP_RESPONSE);
+        if (upgrade_parser.feed_all(upgrade, strlen(upgrade)))
+        {
+            std::cout << "===== upgrade response =====\n"
+                      << "status: " << upgrade_parser.status_code << "\n"
+                      << "upgraded: " << std::boolalpha
+                      << upgrade_parser.is_upgrade() << "\n";
+        }
+    }
+
     return 0;
 }

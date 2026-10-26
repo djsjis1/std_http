@@ -81,3 +81,33 @@ jobs:
     - name: Test
       working-directory: ${{github.workspace}}/build
       run: ctest --output-on-failure
+
+  install-smoke:
+    name: Install smoke test (Linux)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install std_http
+      run: |
+        cmake -B build -DCMAKE_BUILD_TYPE=Release
+        cmake --build build --config Release
+        cmake --install build --prefix ${{github.workspace}}/prefix
+
+    - name: Consume via find_package
+      run: |
+        mkdir consumer && cd consumer
+        cat > main.cpp <<'EOF'
+        #include "http_protocol.h"
+        int main() { return http_protocol::request("GET", "/").empty() ? 1 : 0; }
+        EOF
+        cat > CMakeLists.txt <<'EOF'
+        cmake_minimum_required(VERSION 3.25)
+        project(consumer CXX)
+        find_package(http CONFIG REQUIRED)
+        add_executable(app main.cpp)
+        target_link_libraries(app PRIVATE http::http)
+        EOF
+        cmake -B build -DCMAKE_PREFIX_PATH=${{github.workspace}}/prefix
+        cmake --build build
+        ./build/app && echo "install smoke test passed"

@@ -303,16 +303,68 @@ TEST_CASE(http_protocol_status_text)
     CHECK(std::string(http_protocol::status_text(9999)) == ""); // 未知状态码
 }
 
-// 测试空 body 不添加 Content-Length
-TEST_CASE(http_protocol_empty_body_no_content_length)
+// 链式 body("") 显式空消息体:应输出 Content-Length: 0
+// (回归:has_body_ 被 !empty() 条件短路,空 body 不发 CL 导致服务器挂起等待)
+TEST_CASE(http_protocol_empty_body_content_length_zero)
 {
     std::string result = http_protocol()
                              .request_line("POST", "/api")
                              .header("Host", "example.com")
-                             .body("") // 空 body
+                             .body("") // 显式空 body
                              .build();
 
-    CHECK(result.find("Content-Length:") == std::string::npos);
+    CHECK_THAT(result, ContainsSubstring("Content-Length: 0\r\n"));
+}
+
+// 已有 Transfer-Encoding 时不得叠加 Content-Length(RFC 7230 3.3.2 禁止并存)
+TEST_CASE(http_protocol_te_suppresses_content_length)
+{
+    std::string result = http_protocol::request(
+        "POST", "/", {{"Transfer-Encoding", "chunked"}}, "data");
+
+    CHECK(result.find("Content-Length") == std::string::npos);
+    CHECK_THAT(result, ContainsSubstring("Transfer-Encoding: chunked\r\n"));
+    CHECK_THAT(result, ContainsSubstring("data"));
+}
+
+// 头部值/请求目标中的控制字符(CTL、DEL)应被拒绝;HTAB 在头部值中合法
+TEST_CASE(http_protocol_control_chars_rejected)
+{
+    // NUL 之外的 CTL
+    bool caught = false;
+    try
+    {
+        http_protocol::request("GET", "/", {{"Host", "exa\x01mple.com"}});
+    }
+    catch (const std::invalid_argument &)
+    {
+        caught = true;
+    }
+    CHECK(caught);
+
+    // DEL (0x7F) in target — 字符串拼接避免 \x7fb 被解析为一个转义
+    caught = false;
+    try
+    {
+        http_protocol::request("GET", "/a\x7f" "b");
+    }
+    catch (const std::invalid_argument &)
+    {
+        caught = true;
+    }
+    CHECK(caught);
+
+    // HTAB 在头部值中合法,不应抛出
+    bool threw = false;
+    try
+    {
+        http_protocol::request("GET", "/", {{"Host", "a\tb"}});
+    }
+    catch (...)
+    {
+        threw = true;
+    }
+    CHECK(!threw);
 }
 
 // 测试 url_decode 边界情况

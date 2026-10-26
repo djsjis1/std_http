@@ -10,28 +10,12 @@ namespace http_utils
 {
 
     // 大小写不敏感字符串比较(RFC 7230 头部字段名比较)
+    // std::string / const char* 均可隐式转换为 std::string_view
     inline bool iequals(std::string_view a, std::string_view b)
     {
         if (a.size() != b.size())
             return false;
         for (size_t i = 0; i < a.size(); ++i)
-        {
-            if (std::tolower(static_cast<unsigned char>(a[i])) !=
-                std::tolower(static_cast<unsigned char>(b[i])))
-                return false;
-        }
-        return true;
-    }
-
-    // 大小写不敏感比较(std::string 与 const char*)
-    inline bool iequals(const std::string &a, const char *b)
-    {
-        size_t n = 0;
-        while (b[n])
-            ++n;
-        if (a.size() != n)
-            return false;
-        for (size_t i = 0; i < n; ++i)
         {
             if (std::tolower(static_cast<unsigned char>(a[i])) !=
                 std::tolower(static_cast<unsigned char>(b[i])))

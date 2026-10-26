@@ -9,6 +9,9 @@
 - 流式解析：支持增量喂入数据，适合网络场景
 - 自动累积解析结果（method/url/headers/body）
 - 支持 keep-alive 连续消息解析
+- 依赖 EOF 结束的消息（如无 Content-Length 的响应）通过 `finish()` 在连接关闭时补发完成事件
+- 支持 101 Switching Protocols / CONNECT 协议升级（`is_upgrade()` 识别，`resume_after_upgrade()` 恢复）
+- chunked 编码的 chunk 边界回调（`chunk_header` / `chunk_complete`）
 - 可配置的资源限制，防止恶意输入：
   - `body_limit`: 消息体上限（默认 8MB）
   - `url_limit`: URL 长度上限（默认 8KB）
@@ -21,8 +24,8 @@
 
 - 一站式接口：`request()` / `json()` / `form()` / `response()`
 - 链式接口：细粒度控制报文构建
-- 自动补全 Content-Length
-- RFC 7230 校验，防止 CRLF 头注入
+- 自动补全 Content-Length：显式调用 `body("")` 输出 `Content-Length: 0`；已有 Transfer-Encoding 时不补（RFC 7230 禁止 TE + CL 并存）
+- RFC 7230 校验，防止 CRLF 头注入；拒绝头部值/请求目标中的控制字符（CTL/DEL）
 - URL 编码/解码支持
 - 状态码原因短语查询
 
@@ -76,6 +79,36 @@ parser.feed("ex.html HTTP/1.1\r\n", 18);
 parser.feed("Host: example.com\r\n\r\n", 21);
 
 std::cout << "url: " << parser.http_url << "\n";
+```
+
+### EOF 结束与协议升级
+
+```cpp
+// 无 Content-Length 的响应依赖连接关闭(EOF)结束:
+http_parse parser(HTTP_RESPONSE);
+parser.feed("HTTP/1.1 200 OK\r\n\r\n", 19);
+parser.feed("streaming body", 14);
+parser.finish(); // 连接关闭时调用,补发 message_complete
+
+// 协议升级(WebSocket 握手 / CONNECT 隧道):
+http_parse upgrade_parser(HTTP_RESPONSE);
+upgrade_parser.feed_all(resp, len); // "HTTP/1.1 101 Switching Protocols..."
+if (upgrade_parser.is_upgrade()) {
+    // 解析成功且解析器暂停,后续数据属于隧道协议,不再喂给本解析器
+}
+```
+
+### 回调(流式处理)
+
+```cpp
+http_parse parser(HTTP_REQUEST);
+parser.message_begin = [&]() { /* 新消息开始 */ };
+parser.headers_complete = [&]() {
+    // 此时 method/url/version/headers/status_code 已就绪
+};
+parser.message_complete = [&]() { /* 消息结束 */ };
+parser.body = [&](const char *data, size_t len) { /* 消息体数据块 */ };
+parser.chunk_header = [&]() { /* chunked: 一个 chunk 开始 */ };
 ```
 
 ### 构建 HTTP 请求
@@ -172,13 +205,18 @@ target_link_libraries(your_target PRIVATE http::http)
 
 | 方法 | 说明 |
 | ------ | ------ |
-| `feed(data, len)` | 增量喂入数据，出错返回 false |
-| `feed_all(data, len)` | 解析一条完整消息 |
+| `feed(data, len)` | 增量喂入数据，出错返回 false（协议升级不算错误） |
+| `finish()` | 连接关闭(EOF)时调用，结束依赖 EOF 的消息并补发完成事件 |
+| `feed_all(data, len)` | 解析一条完整消息，输入不完整时返回 false |
 | `reset()` | 重置解析器状态 |
 | `error()` | 获取最近一次错误信息 |
+| `is_upgrade()` | 最后一条消息是否以协议升级结束（101/CONNECT） |
+| `resume_after_upgrade()` | 忽略已发生的升级，继续按 HTTP 解析 |
 | `header(field)` | 按字段名获取头部（大小写不敏感） |
 | `headers(field)` | 获取同名头部的所有值 |
 | `keep_alive()` | 判断连接是否应复用 |
+
+回调（均为可选）：`message_begin` / `headers_complete` / `message_complete` / `url` / `body` / `header_field` / `header_value` / `chunk_header` / `chunk_complete`。
 
 ### http_protocol
 
@@ -201,7 +239,7 @@ target_link_libraries(your_target PRIVATE http::http)
 | `request_line(method, url, version)` | 设置请求行 |
 | `status_line(status, reason, version)` | 设置响应状态行 |
 | `header(field, value, replace)` | 添加头部，`replace=true` 时替换同名头部 |
-| `body(text)` | 设置消息体 |
+| `body(text)` | 设置消息体（显式空消息体输出 `Content-Length: 0`） |
 | `build()` | 生成完整报文 |
 | `clear()` | 清空所有内容，可复用 |
 

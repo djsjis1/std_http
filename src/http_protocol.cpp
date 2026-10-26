@@ -2,7 +2,6 @@
 #include "http_utils.h"
 
 #include <algorithm>
-#include <cctype>
 #include <stdexcept>
 
 namespace
@@ -19,6 +18,18 @@ namespace
                c == '`' || c == '|' || c == '~';
     }
 
+    inline bool is_ascii_digit(char c)
+    {
+        return c >= '0' && c <= '9';
+    }
+
+    // 控制字符(CTL):RFC 7230 禁止出现在头部值/起始行中(HTAB 0x09 除外)
+    inline bool is_ctl(char c)
+    {
+        auto u = static_cast<unsigned char>(c);
+        return (u < 0x20 && u != 0x09) || u == 0x7f;
+    }
+
     inline bool is_token(const std::string &s)
     {
         if (s.empty())
@@ -31,25 +42,25 @@ namespace
         return true;
     }
 
-    // 文本中不得出现 CR/LF/NUL(起始行与头部的通用防线)
+    // 文本中不得出现 CR/LF/NUL 等控制字符(起始行与头部的通用防线;HTAB 允许)
     inline bool is_safe_text(const std::string &s)
     {
         for (char c : s)
         {
-            if (c == '\r' || c == '\n' || c == '\0')
+            if (is_ctl(c))
                 return false;
         }
         return true;
     }
 
-    // 请求目标不得出现空白与 CR/LF
+    // 请求目标不得出现空白与控制字符
     inline bool is_safe_target(const std::string &s)
     {
         if (s.empty())
             return false;
         for (char c : s)
         {
-            if (c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\0')
+            if (c == ' ' || c == '\t' || is_ctl(c))
                 return false;
         }
         return true;
@@ -61,16 +72,16 @@ namespace
         if (v.rfind("HTTP/", 0) != 0)
             return false;
         size_t i = 5;
-        if (i >= v.size() || !std::isdigit(static_cast<unsigned char>(v[i])))
+        if (i >= v.size() || !is_ascii_digit(v[i]))
             return false;
-        while (i < v.size() && std::isdigit(static_cast<unsigned char>(v[i])))
+        while (i < v.size() && is_ascii_digit(v[i]))
             ++i;
         if (i >= v.size() || v[i] != '.')
             return false;
         ++i;
-        if (i >= v.size() || !std::isdigit(static_cast<unsigned char>(v[i])))
+        if (i >= v.size() || !is_ascii_digit(v[i]))
             return false;
-        while (i < v.size() && std::isdigit(static_cast<unsigned char>(v[i])))
+        while (i < v.size() && is_ascii_digit(v[i]))
             ++i;
         return i == v.size();
     }
@@ -229,12 +240,18 @@ std::string http_protocol::response(int status_code,
 std::string http_protocol::url_encode(const std::string &text)
 {
     static const char hex[] = "0123456789ABCDEF";
+    // RFC 3986 未保留字符(显式 ASCII 判断,不依赖全局 locale)
+    auto is_unreserved = [](unsigned char c)
+    {
+        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+               (c >= 'A' && c <= 'Z') || c == '-' || c == '_' ||
+               c == '.' || c == '~';
+    };
     std::string out;
     out.reserve(text.size() * 3);
     for (unsigned char c : text)
     {
-        // RFC 3986 未保留字符原样输出
-        if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~')
+        if (is_unreserved(c))
         {
             out += static_cast<char>(c);
         }
@@ -371,8 +388,11 @@ std::string http_protocol::build() const
         text += h.second;
         text += "\r\n";
     }
-    if (has_body_ && !body_.empty() && !has_header(headers_, "Content-Length"))
+    if (has_body_ && !has_header(headers_, "Content-Length") &&
+        !has_header(headers_, "Transfer-Encoding"))
     {
+        // 显式提供消息体时补 Content-Length(空 body 为 0);
+        // 已有 Transfer-Encoding 时不得再出现 Content-Length(RFC 7230 3.3.2 禁止并存)
         text += "Content-Length: ";
         text += std::to_string(body_.size());
         text += "\r\n";
